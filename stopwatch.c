@@ -19,8 +19,14 @@ MODULE_VERSION("0.01");
   Kernel Driver implemented on DE1-SOC for stopwatch
   Writing MINUTE:SECONDS:HUNDREDTH_SECOND in form of (MM:SS:DD) to module to set the timer
   Read returns the current time
-  Current time also displayed on (6) 7-Segment Displays
+  Current time also displayed on (6) 7-Segment Displays.
+
 */
+
+#define SUCCESS 0
+#define DEVICE_NAME "stopwatch"
+#define CENTISECOND_PER_MINUTE 6000
+#define CENTISECOND_PER_SECOND 100
 
 /* Kernel character device driver /dev/chardev. */
 static int device_open (struct inode * inode, struct file * file);
@@ -35,24 +41,24 @@ static irq_handler_t irq_timer_handler(int irq, void * dev_id, struct pt_regs *r
 static void config_timer(volatile int * timer_base_ptr,int start_value, int cont, int interrupt);
 static int __init init_stopwatch(void);
 static void __exit stop_stopwatch(void);
+static void timer_update (char * arr);
+static int get_command(char * arr, int len);
 
 /* Module Pointer */
-char regWrite[256];
+char reg_write[256];
 static void *LW_virtual;
-static volatile int *TIMER0_ptr, *HEX30_ptr, *HEX54_ptr;
+static volatile int *TIMER0_ptr, *HEX30_ptr, *HEX54_ptr; //Pointers to hardware register
 static unsigned int timer_count = 359999;
-static unsigned indRead, indWrite;
+static unsigned ind_read, ind_write, disp;
+static char * write_command[4] = {"stop", "run", "disp", "nodisp"};
 
 static struct hex_timer {
 	int minute;
 	int second;
-	int tenthSecond;
+	int hundredth_second;
 } hex_timer0;
 
 /* Kernel Pointer */
-
-#define SUCCESS 0
-#define DEVICE_NAME "stopwatch"
 
 static dev_t stopwatch_no = 0;
 static struct cdev * stopwatch_cdev = NULL;
@@ -90,54 +96,60 @@ static irq_handler_t irq_timer_handler(int irq, void * dev_id, struct pt_regs *r
 /* Convert int timer_count to seconds */
 static void hex_timer_update(void) {
 
-	hex_timer0.minute = timer_count / 6000;
-	hex_timer0.second = (timer_count - (hex_timer0.minute * 6000)) / 100;
-	hex_timer0.tenthSecond = timer_count % 100;
+	hex_timer0.minute = timer_count / CENTISECOND_PER_MINUTE;
+	hex_timer0.second = (timer_count - (hex_timer0.minute * CENTISECOND_PER_MINUTE)) / CENTISECOND_PER_SECOND;
+	hex_timer0.hundredth_second = timer_count % 100;
 
+	//Set maximum value to 60:60:99
 	hex_timer0.minute = (hex_timer0.minute > 60) ? 60 : hex_timer0.minute;
 	hex_timer0.second = (hex_timer0.second > 60) ? 60: hex_timer0.second;
 
 	*HEX54_ptr = 0;
-	//MM
-	*HEX54_ptr = (bcd(1, (hex_timer0.minute / 10 ) % 10)) | (bcd(0, hex_timer0.minute % 10));
 	*HEX30_ptr = 0;
-	//SS & DD
-	*HEX30_ptr = (bcd(3, (hex_timer0.second / 10) % 10)) | (bcd(2, hex_timer0.second % 10))| (bcd(1, (hex_timer0.tenthSecond / 10) % 10)) | (bcd(0, (hex_timer0.tenthSecond) % 10));
+	if (disp) {
+		//MM
+		*HEX54_ptr = (bcd(1, (hex_timer0.minute / 10 ) % 10)) 
+		| (bcd(0, hex_timer0.minute % 10));
 
+		//SS & DD
+		*HEX30_ptr = (bcd(3, (hex_timer0.second / 10) % 10)) 
+		| (bcd(2, hex_timer0.second % 10))
+		| (bcd(1, (hex_timer0.hundredth_second / 10) % 10)) 
+		| (bcd(0, (hex_timer0.hundredth_second) % 10));
+	}
 }
 
 /* Binary to Decimal conversion for 7-Segment Display */
 static int bcd(int hexPosition, int binaryInput) {
-	int segmentVal = 0xFFFFFFFF;
+	int segment_value = 0xFFFFFFFF;
 
 	switch (binaryInput) {
-		case 0 : segmentVal = 0x3F; //0011_1111
+		case 0 : segment_value = 0x3F; //0011_1111
 				break;
-		case 1 : segmentVal = 0x06; //0000_0110
+		case 1 : segment_value = 0x06; //0000_0110
 				break;
-		case 2 : segmentVal = 0x5B; //0101_1011
+		case 2 : segment_value = 0x5B; //0101_1011
 				break;
-		case 3 : segmentVal = 0x4F; //0100_1111
+		case 3 : segment_value = 0x4F; //0100_1111
 				break;
-		case 4 : segmentVal = 0x66; //0110_0110
+		case 4 : segment_value = 0x66; //0110_0110
 				break;
-		case 5 : segmentVal = 0x6D; //0110_1101
+		case 5 : segment_value = 0x6D; //0110_1101
 				break;
-		case 6 : segmentVal = 0x7D; //0111_1101
+		case 6 : segment_value = 0x7D; //0111_1101
 				break;
-		case 7 : segmentVal = 0x07; //0000_0111
+		case 7 : segment_value = 0x07; //0000_0111
 				break;
-		case 8 : segmentVal = 0x7F; //0111_1111
+		case 8 : segment_value = 0x7F; //0111_1111
 				break;
-		case 9 : segmentVal = 0x67; //0110_0111
+		case 9 : segment_value = 0x67; //0110_0111
 				break;
-		default : segmentVal = 0xFFFFFFFF;
+		default : segment_value = 0xFFFFFFFF;
 	}
-	segmentVal = (segmentVal << (hexPosition * 8));
-	return segmentVal;
+	segment_value = (segment_value << (hexPosition * 8));
+	return segment_value;
 }
 
-//__init
 static int __init init_stopwatch(void) {
 
 	int err = 0;
@@ -173,9 +185,10 @@ static int __init init_stopwatch(void) {
 	//Initialize variables
 	hex_timer0.minute = 0;
 	hex_timer0.second = 0;
-	hex_timer0.tenthSecond = 0;
+	hex_timer0.hundredth_second = 0;
 	*HEX30_ptr = 0;
 	*HEX54_ptr = 0;
+	disp = 1;
 	hex_timer_update();
 
 	//cfg timer parallel port
@@ -196,16 +209,15 @@ static void __exit stop_stopwatch(void) {
 	class_destroy(stopwatch_class);
 	unregister_chrdev_region(stopwatch_no, 1);
 
-	//HEX
 	*HEX30_ptr = 0;
 	*HEX54_ptr = 0;
-	//count
+
 	*(TIMER0_ptr + 1) &= 0;
 	hex_timer0.minute = 0;
 	hex_timer0.second = 0;
-	hex_timer0.tenthSecond = 0;
+	hex_timer0.hundredth_second = 0;
 	timer_count = 0;
-	//timer ctrl
+
 	free_irq (INTERVAL_TIMER_IRQ, (void *) irq_timer_handler);	
 }
 
@@ -218,59 +230,118 @@ static int device_release(struct inode * inode, struct file * file) {
 }
 
 static ssize_t stopwatch_read (struct file * filp, char * buffer, size_t length, loff_t *offset) {
-	if (!indWrite) {
-		sprintf(regWrite, "%d:%d:%d\n", hex_timer0.minute, hex_timer0.second, hex_timer0.tenthSecond);
+	if (!ind_write) {
+		sprintf(reg_write, "%d:%d:%d\n", hex_timer0.minute, hex_timer0.second, hex_timer0.hundredth_second);
 	}
-	if ((regWrite[indWrite] != '\0') && length) {
-		put_user(regWrite[indWrite++], buffer++);
+	if ((reg_write[ind_write] != '\0') && length) {
+		put_user(reg_write[ind_write++], buffer++);
 		length--;
 	}
 	else
-		indWrite = 0;
-	return indWrite;
+		ind_write = 0;
+	return ind_write;
 }
 
-static ssize_t stopwatch_write (struct file * filp, const char * buffer, size_t length, loff_t *offset) {
-	//Need to read in format of "MM:SS:DD"
-	char regRead[256];
+/* Check against commands or MM:SS:DD format */
+static int get_command(char * arr, int len) {
+	int i = 0;
+	int command_ind = -1;
+	//Check for commands
+	for( i = 0; i < 4; i++) {
+		if (!(strcmp(write_command[i], arr))) {
+			command_ind = i;
+			i = 5;
+		}
+	}
+	//Check for MM:SS:DD format if not found command
+	if ((command_ind < 0) && (len == 8) && (i = 5)) {
+		for (i = 0; i < 8; i++) {
+			if ((*(arr + i) < 47) || (*(arr + i) > 59))
+				i = 9;
+			}
+
+		if (i == 8) 
+			command_ind = 4;
+	}
+	return command_ind;
+}
+
+/* Change timer */
+
+static void timer_update (char * arr) {
+
 	char minstr[3], secstr[3], hunSecStr[3];
 	unsigned int min, sec, hunSec;
+
 	//stop Stopwatch
 	*(TIMER0_ptr + 1) = 0xB;
 	timer_count = 0;
-	if (length < 256) {
-		for(indRead = 0; indRead < length; indRead++) {
-			regRead[indRead] = buffer[indRead];
-		}
-		regRead[indRead] = '\0';
 
-		//Format input
-		minstr[0] = regRead[0];
-		minstr[1] = regRead[1];
-		minstr[2] = '\0';
-		secstr[0] = regRead[3];
-		secstr[1] = regRead[4];
-		secstr[2] = '\0';
-		hunSecStr[0] = regRead[6];
-		hunSecStr[1] = regRead[7];
-		hunSecStr[2] = '\0';
+	//Format input
+	minstr[0] = *(arr);
+	minstr[1] = *(arr + 1);
+	minstr[2] = '\0';
+	secstr[0] = *(arr + 3);
+	secstr[1] = *(arr + 4);
+	secstr[2] = '\0';
+	hunSecStr[0] = *(arr + 6);
+	hunSecStr[1] = *(arr + 7);
+	hunSecStr[2] = '\0';
 
-		//convert to int
-		kstrtouint(minstr, 10, &min);
-		kstrtouint(secstr, 10, &sec);
-		kstrtouint(hunSecStr, 10, &hunSec);
+	//convert to int
+	kstrtouint(minstr, 10, &min);
+	kstrtouint(secstr, 10, &sec);
+	kstrtouint(hunSecStr, 10, &hunSec);
 
-		//to count format
-		timer_count = min * 6000;
-		timer_count += sec * 100;
-		timer_count += hunSec;
-		printk("min: %d, sec: %d, hunSec: %d, timer_count: %d\n", min, sec, hunSec, timer_count);
-		printk("regRead: %s, minStr: %s, secStr: %s, hunSecStr: %s\n", regRead, minstr, secstr, hunSecStr);
-		hex_timer_update();
-	}
-  // Start timer
+	//to count format
+	timer_count = min * 6000;
+	timer_count += sec * 100;
+	timer_count += hunSec;
+	printk("min: %d, sec: %d, hunSec: %d, timer_count: %d\n", min, sec, hunSec, timer_count);
+	printk("regRead: %s, minStr: %s, secStr: %s, hunSecStr: %s\n", arr, minstr, secstr, hunSecStr);
+	hex_timer_update();
+
+  	// Start timer
 	*(TIMER0_ptr + 1) = 0x7;
-	return indRead;
+
+}
+
+static ssize_t stopwatch_write (struct file * filp, const char * buffer, size_t length, loff_t *offset) {
+	char regRead[256];
+	int command = 10;
+
+	//Read buffer input
+	if (length < 256) {
+		for(ind_read = 0; ind_read < length-1; ind_read++) {
+			regRead[ind_read] = buffer[ind_read];
+		}
+		regRead[ind_read++] = '\0';
+	}
+
+	//Get command
+	command = get_command(regRead, strlen(regRead));
+	switch (command) {
+
+		case(0) : printk("stop\n");
+				*(TIMER0_ptr + 1) = 0xB;
+				break;
+		case(1) : printk("run\n");
+				*(TIMER0_ptr + 1) = 0x7;
+				break;
+		case(2) : printk("disp\n");
+				disp = 1;
+				hex_timer_update();
+				break;
+		case(3) : printk("nodisp\n");
+				disp = 0;
+				hex_timer_update();
+				break;
+		case(4) : printk("New Time\n");
+				timer_update(regRead);
+				break;
+		default : printk("Not a valid command\n");
+	}
+	return ind_read;
 }
 
 module_init (init_stopwatch);
