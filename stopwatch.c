@@ -50,7 +50,7 @@ static void *LW_virtual;
 static volatile int *TIMER0_ptr, *HEX30_ptr, *HEX54_ptr; //Pointers to hardware register
 static unsigned int timer_count = 359999;
 static unsigned ind_read, ind_write, disp;
-static char * write_command[4] = {"stop", "run", "disp", "nodisp"};
+static char * write_command[4] = {"stop", "run", "disp", "nodisp"}; 
 
 static struct hex_timer {
 	int minute;
@@ -82,6 +82,8 @@ static void config_timer(volatile int * timer_base_ptr, int start_value, int con
 	*(timer_base_ptr + 1) = (0x4 | (cont << 1) | interrupt); //[Unused|Stop|Start|Cont|Interrupt];
 	printk("Timer Control: %#x\n", *(timer_base_ptr + 1));
 }
+
+/* Hardware Clock timer0, 100 MHz */
 
 static irq_handler_t irq_timer_handler(int irq, void * dev_id, struct pt_regs *reg) {
 	if (timer_count > 0) 
@@ -231,7 +233,7 @@ static int device_release(struct inode * inode, struct file * file) {
 
 static ssize_t stopwatch_read (struct file * filp, char * buffer, size_t length, loff_t *offset) {
 	if (!ind_write) {
-		sprintf(reg_write, "%d:%d:%d\n", hex_timer0.minute, hex_timer0.second, hex_timer0.hundredth_second);
+		sprintf(reg_write, "%02d:%02d:%02d\n", hex_timer0.minute, hex_timer0.second, hex_timer0.hundredth_second);
 	}
 	if ((reg_write[ind_write] != '\0') && length) {
 		put_user(reg_write[ind_write++], buffer++);
@@ -271,9 +273,10 @@ static int get_command(char * arr, int len) {
 static void timer_update (char * arr) {
 
 	char minstr[3], secstr[3], hunSecStr[3];
-	unsigned int min, sec, hunSec;
+	unsigned int min, sec, hunSec, tempStatus;
 
 	//stop Stopwatch
+	tempStatus = *(TIMER0_ptr);
 	*(TIMER0_ptr + 1) = 0xB;
 	timer_count = 0;
 
@@ -302,7 +305,7 @@ static void timer_update (char * arr) {
 	hex_timer_update();
 
   	// Start timer
-	*(TIMER0_ptr + 1) = 0x7;
+	*(TIMER0_ptr + 1) = tempStatus;
 
 }
 
