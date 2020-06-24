@@ -17,9 +17,10 @@ MODULE_VERSION("0.01");
 
 /*
   Kernel Driver implemented on DE1-SOC for stopwatch
-  Writing MINUTE:SECONDS:HUNDREDTH_SECOND in form of (MM:SS:DD) to module to set the timer
+  Supports "stop", "run" for stopwatch. "disp", and "nodisp" for display of 7-Segment displays.
+  MINUTE:SECONDS:HUNDREDTH_SECOND in form of (MM:SS:DD) to module to set the timer
   Read returns the current time
-  Current time also displayed on (6) 7-Segment Displays.
+  Current time is displayed on (6) 7-Segment Displays.
 
 */
 
@@ -27,8 +28,9 @@ MODULE_VERSION("0.01");
 #define DEVICE_NAME "stopwatch"
 #define CENTISECOND_PER_MINUTE 6000
 #define CENTISECOND_PER_SECOND 100
+#define MAXBUFFER 256
 
-/* Kernel character device driver /dev/chardev. */
+/* Kernel character device driver /dev/stopwatch. */
 static int device_open (struct inode * inode, struct file * file);
 static int device_release (struct inode * inode, struct file * filp);
 static ssize_t stopwatch_read (struct file * filp, char * buffer, size_t length, loff_t *offset);
@@ -45,12 +47,12 @@ static void timer_update (char * arr);
 static int get_command(char * arr, int len);
 
 /* Module Pointer */
-char reg_write[256];
+char reg_write[MAXBUFFER];
 static void *LW_virtual;
 static volatile int *TIMER0_ptr, *HEX30_ptr, *HEX54_ptr; //Pointers to hardware register
 static unsigned int timer_count = 359999;
 static unsigned ind_read, ind_write, disp;
-static char * write_command[4] = {"stop", "run", "disp", "nodisp"}; 
+static const char * write_command[4] = {"stop", "run", "disp", "nodisp"}; 
 
 static struct hex_timer {
 	int minute;
@@ -205,7 +207,6 @@ static int __init init_stopwatch(void) {
 
 //__exit
 static void __exit stop_stopwatch(void) {	
-
 	device_destroy(stopwatch_class, stopwatch_no);
 	cdev_del(stopwatch_cdev);
 	class_destroy(stopwatch_class);
@@ -269,9 +270,7 @@ static int get_command(char * arr, int len) {
 }
 
 /* Change timer */
-
 static void timer_update (char * arr) {
-
 	char minstr[3], secstr[3], hunSecStr[3];
 	unsigned int min, sec, hunSec, tempStatus;
 
@@ -314,7 +313,7 @@ static ssize_t stopwatch_write (struct file * filp, const char * buffer, size_t 
 	int command = 10;
 
 	//Read buffer input
-	if (length < 256) {
+	if (length < MAXBUFFER) {
 		for(ind_read = 0; ind_read < length-1; ind_read++) {
 			regRead[ind_read] = buffer[ind_read];
 		}
@@ -324,7 +323,6 @@ static ssize_t stopwatch_write (struct file * filp, const char * buffer, size_t 
 	//Get command
 	command = get_command(regRead, strlen(regRead));
 	switch (command) {
-
 		case(0) : printk("stop\n");
 				*(TIMER0_ptr + 1) = 0xB;
 				break;
