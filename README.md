@@ -1,9 +1,13 @@
 # stopwatch-DE1-SOC
 
   Kernel Driver implemented on DE1-SOC for stopwatch
+  
   Supports "stop", "run" for stopwatch. "disp", and "nodisp" for display of 7-Segment displays.
+  
   MINUTE:SECONDS:HUNDREDTH_SECOND in form of (MM:SS:DD) to module to set the timer
+
   Read returns the current time
+  
   Current time is displayed on (6) 7-Segment Displays
   
   User.c
